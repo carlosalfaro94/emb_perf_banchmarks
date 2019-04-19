@@ -4,18 +4,11 @@
 #include <random>
 #include <thread>
 
-#include <pybind11/embed.h> // everything needed for embedding
+#include <julia.h>
+JULIA_DEFINE_FAST_TLS() // only define this once, in an executable (not in a shared library) if you want fast code.
 
 using namespace std;
 using namespace chrono;
-namespace py = pybind11;
-
-
-string get_module_name (const string& script_fname)
-{
-    //auto temp = script_fname.substr(script_fname.find_last_of("/")+1);
-    return script_fname.substr(0, script_fname.find(".py")).substr(script_fname.find_last_of("/")+1);
-}
 
 int main(int argc, char* argv[])
 {
@@ -76,28 +69,14 @@ int main(int argc, char* argv[])
     cout << "Succesfully loaded input data" << endl;
     cout << "Records read: " << data_size << endl;
     
-    cout << "Setting up Python environment...\n";
-    py::scoped_interpreter guard{};
+    cout << "Setting up Julia environment...\n";
+    jl_init();
 
-    py::object PyModule, py_function;
-    
-    string module_name = get_module_name(script_fname);
-
-    try
-    {
-        PyModule        = py::module::import( module_name.c_str() );          // import python module
-        py_function     = PyModule.attr( func_name.c_str() );           // retrieve reference to function
-    }
-    catch(const exception& e)
-    {
-        cerr << e.what() << '\n';
-        cout << "Consider setting environment variable PYTHONPATH (export PYHONPATH='path_to_dir')\n";
-        cout << "Error while loading python module...\nExiting...\n";
-        return EXIT_FAILURE;
-    }
-    cout << "Python environment set up\n";
+    jl_load(jl_base_module, script_fname.c_str());  // load julia module
+    jl_function_t *jl_function = jl_get_function(jl_base_module, func_name.c_str());
+    jl_value_t *arg; // to be filled in each call
+    cout << "Julia environment set up\n";
  
-    
     microseconds function_call_duration;
     int nrep = 0;
     int index;
@@ -110,8 +89,9 @@ int main(int argc, char* argv[])
             break;
         
         index = nrep % data_size;
+        arg = jl_box_uint64(data.at(index));
         auto inner_start_time = high_resolution_clock::now();
-        py_function(data.at(index));            
+        jl_call1(jl_function, arg);
         auto inner_end_time = high_resolution_clock::now();
 
         function_call_duration += duration_cast<microseconds>(inner_end_time - inner_start_time);
@@ -130,7 +110,7 @@ int main(int argc, char* argv[])
         << "\n\tAvg time per function call:     " << ((float) function_call_duration.count() )/ nrep << " us/function call"
         << endl;
 
-    
+    jl_atexit_hook(0);
     cout << "Execution finished gracefully" << endl;
     return EXIT_SUCCESS;
 }
